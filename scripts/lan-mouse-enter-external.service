@@ -1,0 +1,12 @@
+[Unit]
+Description=Move Lan Mouse cursor to Omarchy external display on entry
+After=lan-mouse.service
+Requires=lan-mouse.service
+
+[Service]
+ExecStart=%h/.local/bin/lan-mouse-enter-external
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
