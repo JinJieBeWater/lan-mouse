@@ -38,12 +38,65 @@ use tokio::sync::{
     oneshot,
 };
 
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 struct Bounds {
     xmin: f64,
     xmax: f64,
     ymin: f64,
     ymax: f64,
+}
+
+fn crossed_main_display_left_edge(
+    location_x: f64,
+    location_y: f64,
+    relative_x: f64,
+    main: Bounds,
+    displays: &[Bounds],
+) -> bool {
+    location_x >= main.xmin
+        && location_x + relative_x <= main.xmin
+        && location_y >= main.ymin
+        && location_y < main.ymax
+        && !displays.iter().any(|display| {
+            display.xmin < main.xmin
+                && display.xmax >= main.xmin
+                && location_y >= display.ymin
+                && location_y < display.ymax
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Bounds, crossed_main_display_left_edge};
+
+    #[test]
+    fn left_capture_uses_only_exposed_main_display_edge() {
+        let main = Bounds {
+            xmin: 0.0,
+            xmax: 2560.0,
+            ymin: 0.0,
+            ymax: 1440.0,
+        };
+        let displays = [
+            main,
+            Bounds {
+                xmin: -1710.0,
+                xmax: 0.0,
+                ymin: 1184.0,
+                ymax: 2291.0,
+            },
+        ];
+
+        assert!(crossed_main_display_left_edge(
+            1.0, 1183.0, -2.0, main, &displays
+        ));
+        assert!(!crossed_main_display_left_edge(
+            1.0, 1184.0, -2.0, main, &displays
+        ));
+        assert!(!crossed_main_display_left_edge(
+            -1.0, 1300.0, -2.0, main, &displays
+        ));
+    }
 }
 
 #[derive(Debug)]
@@ -56,6 +109,10 @@ struct InputCaptureState {
     enter_position: Option<CGPoint>,
     /// bounds of the input capture area
     bounds: Bounds,
+    /// bounds of every active display
+    display_bounds: Vec<Bounds>,
+    /// bounds of the macOS main display
+    main_display_bounds: Bounds,
     /// current state of modifier keys
     modifier_state: XMods,
 }
@@ -77,6 +134,8 @@ impl InputCaptureState {
             current_pos: None,
             enter_position: None,
             bounds: Bounds::default(),
+            display_bounds: Vec::new(),
+            main_display_bounds: Bounds::default(),
             modifier_state: Default::default(),
         };
         res.update_bounds()?;
@@ -89,11 +148,19 @@ impl InputCaptureState {
         let relative_y = event.get_double_value_field(EventField::MOUSE_EVENT_DELTA_Y);
 
         for &position in self.active_clients.iter() {
-            if (position == Position::Left && (location.x + relative_x) <= self.bounds.xmin)
-                || (position == Position::Right && (location.x + relative_x) >= self.bounds.xmax)
-                || (position == Position::Top && (location.y + relative_y) <= self.bounds.ymin)
-                || (position == Position::Bottom && (location.y + relative_y) >= self.bounds.ymax)
-            {
+            let crossed = match position {
+                Position::Left => crossed_main_display_left_edge(
+                    location.x,
+                    location.y,
+                    relative_x,
+                    self.main_display_bounds,
+                    &self.display_bounds,
+                ),
+                Position::Right => (location.x + relative_x) >= self.bounds.xmax,
+                Position::Top => (location.y + relative_y) <= self.bounds.ymin,
+                Position::Bottom => (location.y + relative_y) >= self.bounds.ymax,
+            };
+            if crossed {
                 log::debug!("Crossed barrier into position: {position:?}");
                 return Some(position);
             }
@@ -105,15 +172,36 @@ impl InputCaptureState {
     fn update_bounds(&mut self) -> Result<(), MacosCaptureCreationError> {
         let active_ids =
             CGDisplay::active_displays().map_err(MacosCaptureCreationError::ActiveDisplays)?;
+        self.bounds = Bounds::default();
+        self.display_bounds.clear();
         active_ids.iter().for_each(|d| {
             let bounds = CGDisplay::new(*d).bounds();
-            self.bounds.xmin = self.bounds.xmin.min(bounds.origin.x);
-            self.bounds.xmax = self.bounds.xmax.max(bounds.origin.x + bounds.size.width);
-            self.bounds.ymin = self.bounds.ymin.min(bounds.origin.y);
-            self.bounds.ymax = self.bounds.ymax.max(bounds.origin.y + bounds.size.height);
+            let bounds = Bounds {
+                xmin: bounds.origin.x,
+                xmax: bounds.origin.x + bounds.size.width,
+                ymin: bounds.origin.y,
+                ymax: bounds.origin.y + bounds.size.height,
+            };
+            self.bounds.xmin = self.bounds.xmin.min(bounds.xmin);
+            self.bounds.xmax = self.bounds.xmax.max(bounds.xmax);
+            self.bounds.ymin = self.bounds.ymin.min(bounds.ymin);
+            self.bounds.ymax = self.bounds.ymax.max(bounds.ymax);
+            self.display_bounds.push(bounds);
         });
 
-        log::debug!("Updated displays bounds: {0:?}", self.bounds);
+        let main = CGDisplay::main().bounds();
+        self.main_display_bounds = Bounds {
+            xmin: main.origin.x,
+            xmax: main.origin.x + main.size.width,
+            ymin: main.origin.y,
+            ymax: main.origin.y + main.size.height,
+        };
+
+        log::debug!(
+            "Updated displays bounds: {:?}, main display: {:?}",
+            self.bounds,
+            self.main_display_bounds
+        );
         Ok(())
     }
 
@@ -123,7 +211,7 @@ impl InputCaptureState {
         let edge_offset = 1.0;
         // move cursor location to display bounds
         match position {
-            Position::Left => location.x = self.bounds.xmin + edge_offset,
+            Position::Left => location.x = self.main_display_bounds.xmin + edge_offset,
             Position::Right => location.x = self.bounds.xmax - edge_offset,
             Position::Top => location.y = self.bounds.ymin + edge_offset,
             Position::Bottom => location.y = self.bounds.ymax - edge_offset,
