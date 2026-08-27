@@ -46,6 +46,8 @@ struct Bounds {
     ymax: f64,
 }
 
+const MAIN_DISPLAY_LEFT_EDGE_FRACTION: f64 = 0.5;
+
 fn crossed_main_display_left_edge(
     location_x: f64,
     location_y: f64,
@@ -56,7 +58,7 @@ fn crossed_main_display_left_edge(
     location_x >= main.xmin
         && location_x + relative_x <= main.xmin
         && location_y >= main.ymin
-        && location_y < main.ymax
+        && location_y < main.ymin + (main.ymax - main.ymin) * MAIN_DISPLAY_LEFT_EDGE_FRACTION
         && !displays.iter().any(|display| {
             display.xmin < main.xmin
                 && display.xmax >= main.xmin
@@ -70,7 +72,7 @@ mod tests {
     use super::{Bounds, crossed_main_display_left_edge};
 
     #[test]
-    fn left_capture_uses_only_exposed_main_display_edge() {
+    fn left_capture_uses_only_upper_half_of_exposed_main_display_edge() {
         let main = Bounds {
             xmin: 0.0,
             xmax: 2560.0,
@@ -88,7 +90,10 @@ mod tests {
         ];
 
         assert!(crossed_main_display_left_edge(
-            1.0, 1183.0, -2.0, main, &displays
+            1.0, 719.0, -2.0, main, &displays
+        ));
+        assert!(!crossed_main_display_left_edge(
+            1.0, 720.0, -2.0, main, &displays
         ));
         assert!(!crossed_main_display_left_edge(
             1.0, 1184.0, -2.0, main, &displays
