@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+app="$HOME/Applications/Lan Mouse.app"
+lan_mouse="$app/Contents/MacOS/lan-mouse"
+agent_label="com.jinjiebewater.lan-mouse-auto-position"
+agent_plist="$HOME/Library/LaunchAgents/$agent_label.plist"
+agent_target="gui/$UID/$agent_label"
+
+usage() {
+  cat <<'EOF'
+Usage: lm <home|work|status>
+
+Commands:
+  home    Enable Omarchy edge and automatic display positioning
+  work    Disable Omarchy edge for the alternate work layout
+  status  Show current layout mode and component state
+
+Examples:
+  lm home
+  lm work
+  lm status
+EOF
+}
+
+ensure_daemon() {
+  [[ -x $lan_mouse ]] || {
+    echo "Error: Lan Mouse not found at $app" >&2
+    exit 1
+  }
+  "$lan_mouse" cli list >/dev/null 2>&1 && return
+  open -gj "$app"
+  for _ in {1..20}; do
+    sleep 0.25
+    "$lan_mouse" cli list >/dev/null 2>&1 && return
+  done
+  echo "Error: Lan Mouse daemon did not start" >&2
+  exit 1
+}
+
+status() {
+  local client_line="" active="stopped" watcher="unloaded" enabled="enabled" mode="mixed"
+  client_line=$("$lan_mouse" cli list 2>/dev/null | head -1 || true)
+  [[ $client_line == *"active: true"* ]] && active="active"
+  [[ $client_line == *"active: false"* ]] && active="inactive"
+  launchctl print "$agent_target" >/dev/null 2>&1 && watcher="running"
+  launchctl print-disabled "gui/$UID" | grep -Fq "\"$agent_label\" => disabled" && enabled="disabled"
+
+  [[ $active == active && $watcher == running && $enabled == enabled ]] && mode="home"
+  [[ $active == inactive && $watcher == unloaded && $enabled == disabled ]] && mode="work"
+
+  printf 'mode: %s\nclient: %s\nauto-position: %s/%s\n' "$mode" "$active" "$enabled" "$watcher"
+}
+
+case ${1:-} in
+  home)
+    ensure_daemon
+    [[ -x $HOME/.local/bin/lan-mouse-auto-position ]] || {
+      echo "Error: auto-position helper is missing" >&2
+      exit 1
+    }
+    [[ -f $agent_plist ]] || {
+      echo "Error: LaunchAgent plist is missing: $agent_plist" >&2
+      exit 1
+    }
+    launchctl enable "$agent_target"
+    launchctl print "$agent_target" >/dev/null 2>&1 || launchctl bootstrap "gui/$UID" "$agent_plist"
+    launchctl kickstart -k "$agent_target"
+    "$lan_mouse" cli activate 0
+    sleep 1
+    status
+    ;;
+  work)
+    ensure_daemon
+    "$lan_mouse" cli deactivate 0
+    launchctl disable "$agent_target"
+    launchctl bootout "$agent_target" 2>/dev/null || true
+    status
+    ;;
+  status)
+    status
+    ;;
+  -h|--help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
