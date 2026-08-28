@@ -12,8 +12,8 @@ usage() {
 Usage: lm <home|work|status>
 
 Commands:
-  home    Enable Omarchy edge and automatic display positioning
-  work    Disable Omarchy edge for the alternate work layout
+  home    Start Lan Mouse; Control+Option+Esc releases local input
+  work    Stop Lan Mouse completely for the alternate work layout
   status  Show current layout mode and component state
 
 Examples:
@@ -47,7 +47,7 @@ status() {
   launchctl print-disabled "gui/$UID" | grep -Fq "\"$agent_label\" => disabled" && enabled="disabled"
 
   [[ $active == active && $watcher == running && $enabled == enabled ]] && mode="home"
-  [[ $active == inactive && $watcher == unloaded && $enabled == disabled ]] && mode="work"
+  [[ $active =~ ^(inactive|stopped)$ && $watcher == unloaded && $enabled == disabled ]] && mode="work"
   [[ -f $HOME/.config/lan-mouse/home-disabled && $watcher == unloaded ]] && mode="safe-off"
 
   printf 'mode: %s\nclient: %s\nauto-position: %s/%s\n' "$mode" "$active" "$enabled" "$watcher"
@@ -80,6 +80,13 @@ case ${1:-} in
     "$lan_mouse" cli list >/dev/null 2>&1 && "$lan_mouse" cli deactivate 0
     launchctl disable "$agent_target"
     launchctl bootout "$agent_target" 2>/dev/null || true
+    osascript -e 'tell application id "de.feschber.LanMouse" to quit' >/dev/null 2>&1 || true
+    pkill -TERM -f "$lan_mouse" >/dev/null 2>&1 || true
+    for _ in {1..8}; do
+      pgrep -f "$lan_mouse" >/dev/null || break
+      sleep 0.25
+    done
+    pkill -KILL -f "$lan_mouse" >/dev/null 2>&1 || true
     status
     ;;
   status)
