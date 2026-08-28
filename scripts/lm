@@ -48,12 +48,18 @@ status() {
 
   [[ $active == active && $watcher == running && $enabled == enabled ]] && mode="home"
   [[ $active == inactive && $watcher == unloaded && $enabled == disabled ]] && mode="work"
+  [[ -f $HOME/.config/lan-mouse/home-disabled && $watcher == unloaded ]] && mode="safe-off"
 
   printf 'mode: %s\nclient: %s\nauto-position: %s/%s\n' "$mode" "$active" "$enabled" "$watcher"
 }
 
 case ${1:-} in
   home)
+    [[ ! -f $HOME/.config/lan-mouse/home-disabled ]] || {
+      echo "Error: home mode is safety-locked after an input-capture incident." >&2
+      echo "Keep using 'lm work'. Fix capture release before removing the lock." >&2
+      exit 1
+    }
     ensure_daemon
     [[ -x $HOME/.local/bin/lan-mouse-auto-position ]] || {
       echo "Error: auto-position helper is missing" >&2
@@ -71,8 +77,7 @@ case ${1:-} in
     status
     ;;
   work)
-    ensure_daemon
-    "$lan_mouse" cli deactivate 0
+    "$lan_mouse" cli list >/dev/null 2>&1 && "$lan_mouse" cli deactivate 0
     launchctl disable "$agent_target"
     launchctl bootout "$agent_target" 2>/dev/null || true
     status
