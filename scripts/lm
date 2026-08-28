@@ -6,6 +6,7 @@ lan_mouse="$app/Contents/MacOS/lan-mouse"
 agent_label="com.jinjiebewater.lan-mouse-auto-position"
 agent_plist="$HOME/Library/LaunchAgents/$agent_label.plist"
 agent_target="gui/$UID/$agent_label"
+omarchy_ip="100.69.87.101"
 
 usage() {
   cat <<'EOF'
@@ -58,6 +59,16 @@ case ${1:-} in
     [[ ! -f $HOME/.config/lan-mouse/home-disabled ]] || {
       echo "Error: home mode is safety-locked after an input-capture incident." >&2
       echo "Keep using 'lm work'. Fix capture release before removing the lock." >&2
+      exit 1
+    }
+    tailscale ping --timeout=2s -c 1 "$omarchy_ip" >/dev/null 2>&1 || {
+      echo "Error: Omarchy is offline. Refusing to enable input capture." >&2
+      echo "Use 'lm work' until Tailscale can reach $omarchy_ip." >&2
+      exit 1
+    }
+    nc -G 2 -z "$omarchy_ip" 4242 >/dev/null 2>&1 || {
+      echo "Error: Omarchy Lan Mouse is not listening on $omarchy_ip:4242." >&2
+      echo "Use 'lm work' until the remote service is running." >&2
       exit 1
     }
     ensure_daemon
